@@ -4,7 +4,7 @@ COPY . .
 RUN go get -d .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo
 
-FROM scratch
+FROM alpine
 WORKDIR /app
 EXPOSE 80
 COPY --from=builder /go/src/github.com/eniot/sensor-data-collector/sensor-data-collector .
