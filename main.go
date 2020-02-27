@@ -62,7 +62,7 @@ func collectorCmd() *cobra.Command {
 				var event eventPayload
 				json.Unmarshal(msg.Payload(), &event)
 
-				ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, _ = context.WithTimeout(context.Background(), 30*time.Second)
 
 				opts := options.Update().SetUpsert(true)
 				devices.UpdateOne(ctx, bson.M{"_id": bson.M{"$eq": event.ID}},
