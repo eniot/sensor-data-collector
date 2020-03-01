@@ -13,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var mongoDb *mongo.Database
+
 func apiCmd() *cobra.Command {
 	var cmd = &cobra.Command{
 		Use:   "api",
@@ -29,10 +31,12 @@ func apiCmd() *cobra.Command {
 			if err != nil {
 				log.Fatal(err)
 			}
-			mongoDb := mongoClient.Database(database)
+			mongoDb = mongoClient.Database(database)
 
 			e := echo.New()
-			e.GET("/", func(c echo.Context) error { return listDevices(c, mongoDb) })
+			e.GET("/", listDevices)
+			e.GET("/:id", getDevice)
+			e.POST("/:id/events/_search", searchEvents)
 			e.Logger.Fatal(e.Start(addr))
 
 		},
@@ -49,14 +53,65 @@ func apiCmd() *cobra.Command {
 	return cmd
 }
 
-func listDevices(c echo.Context, mongoDb *mongo.Database) error {
+func listDevices(c echo.Context) error {
 	devices := mongoDb.Collection("devices")
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-	cur, err := devices.Find(ctx, bson.M{})
+	cur, err := devices.Find(context.TODO(), bson.M{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	res := make([]interface{}, 10)
-	cur.All(ctx, res)
-	return c.JSON(200, res)
+	var results []bson.M
+	if err := cur.All(context.TODO(), &results); err != nil {
+		log.Fatal(err)
+	}
+	return c.JSON(200, results)
+}
+
+func getDevice(c echo.Context) error {
+	devices := mongoDb.Collection("devices")
+	result := devices.FindOne(context.TODO(), bson.M{"_id": c.Param("id")})
+	var devObj bson.M
+	err := result.Decode(&devObj)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return c.JSON(200, devObj)
+}
+
+type searchQuery struct {
+	Limit     int64  `json:"limit"`
+	Skip      int64  `json:"skip"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+}
+
+func searchEvents(c echo.Context) error {
+	deviceEvents := mongoDb.Collection(c.Param("id"))
+
+	var query = new(searchQuery)
+	if err := c.Bind(query); err != nil {
+		return err
+	}
+
+	startTime, err := time.Parse(time.RFC3339, query.StartTime)
+	if err != nil {
+		startTime = time.Now().AddDate(0, 0, -1)
+	}
+	endTime, err := time.Parse(time.RFC3339, query.EndTime)
+	if err != nil {
+		endTime = time.Now()
+	}
+
+	opts := options.Find().SetLimit(query.Limit).SetSkip(query.Skip)
+
+	cur, err := deviceEvents.Find(context.TODO(), bson.M{
+		"_id": bson.M{"$gte": startTime, "$lte": endTime},
+	}, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var results []bson.M
+	if err := cur.All(context.TODO(), &results); err != nil {
+		log.Fatal(err)
+	}
+	return c.JSON(200, results)
 }
