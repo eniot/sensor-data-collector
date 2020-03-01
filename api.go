@@ -37,6 +37,7 @@ func apiCmd() *cobra.Command {
 			e.GET("/", listDevices)
 			e.GET("/:id", getDevice)
 			e.POST("/:id/events/_search", searchEvents)
+			e.POST("/:id/events/_count", countEvents)
 			e.Logger.Fatal(e.Start(addr))
 
 		},
@@ -78,40 +79,67 @@ func getDevice(c echo.Context) error {
 }
 
 type searchQuery struct {
-	Limit     int64  `json:"limit"`
-	Skip      int64  `json:"skip"`
-	StartTime string `json:"startTime"`
-	EndTime   string `json:"endTime"`
+	Limit        int64  `json:"limit"`
+	Skip         int64  `json:"skip"`
+	StartTimeStr string `json:"startTime"`
+	EndTimeStr   string `json:"endTime"`
+	StartTime    time.Time
+	EndTime      time.Time
+}
+
+type eventRow struct {
+	ID time.Time `bson:"_id"`
+}
+
+func getSearchQuery(c echo.Context) (query *searchQuery, err error) {
+	query = new(searchQuery)
+	if err := c.Bind(query); err != nil {
+		return nil, err
+	}
+	query.StartTime, err = time.Parse(time.RFC3339, query.StartTimeStr)
+	if err != nil {
+		query.StartTime = time.Now().AddDate(0, 0, -1)
+	}
+	query.EndTime, err = time.Parse(time.RFC3339, query.EndTimeStr)
+	if err != nil {
+		query.EndTime = time.Now()
+	}
+	return query, nil
 }
 
 func searchEvents(c echo.Context) error {
-	deviceEvents := mongoDb.Collection(c.Param("id"))
-
-	var query = new(searchQuery)
-	if err := c.Bind(query); err != nil {
+	query, err := getSearchQuery(c)
+	if err != nil {
 		return err
 	}
-
-	startTime, err := time.Parse(time.RFC3339, query.StartTime)
-	if err != nil {
-		startTime = time.Now().AddDate(0, 0, -1)
-	}
-	endTime, err := time.Parse(time.RFC3339, query.EndTime)
-	if err != nil {
-		endTime = time.Now()
-	}
-
+	deviceEvents := mongoDb.Collection(c.Param("id"))
 	opts := options.Find().SetLimit(query.Limit).SetSkip(query.Skip)
-
 	cur, err := deviceEvents.Find(context.TODO(), bson.M{
-		"_id": bson.M{"$gte": startTime, "$lte": endTime},
+		"_id": bson.M{"$gte": query.StartTime, "$lte": query.EndTime},
 	}, opts)
 	if err != nil {
 		log.Fatal(err)
 	}
-	var results []bson.M
-	if err := cur.All(context.TODO(), &results); err != nil {
-		log.Fatal(err)
+	var results []time.Time
+	var row eventRow
+	for cur.Next(context.TODO()) {
+		cur.Decode(&row)
+		results = append(results, row.ID)
 	}
 	return c.JSON(200, results)
+}
+
+func countEvents(c echo.Context) error {
+	query, err := getSearchQuery(c)
+	if err != nil {
+		return err
+	}
+	deviceEvents := mongoDb.Collection(c.Param("id"))
+	count, err := deviceEvents.CountDocuments(context.TODO(), bson.M{
+		"_id": bson.M{"$gte": query.StartTime, "$lte": query.EndTime},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return c.JSON(200, count)
 }
